@@ -16,7 +16,7 @@
  * limitations under the License.
  */
 
-package org.s1ck;
+package org.s1ck.demos;
 
 import org.apache.flink.api.common.functions.MapFunction;
 import org.apache.flink.api.common.typeinfo.BasicTypeInfo;
@@ -42,7 +42,11 @@ import org.gradoop.model.impl.pojo.VertexPojo;
 import org.gradoop.model.impl.properties.PropertyList;
 import org.gradoop.util.GradoopFlinkConfig;
 
-public class MovieGraphDemo {
+/**
+ * Reads the movie example graph from Neo4j into Gradoop and groups it based
+ * on vertex and edge labels.
+ */
+public class MovieGraphGroupingDemo {
 
   public static final String NEO4J_REST_URI = "http://localhost:7474/db/data/";
 
@@ -84,6 +88,8 @@ public class MovieGraphDemo {
       new EdgeToDataString<EdgePojo>())
       .execute(GraphCollection.fromGraph(groupedGraph))
       .print();
+
+    System.out.println(env.getLastJobExecutionResult().getNetRuntime());
   }
 
   @SuppressWarnings("unchecked")
