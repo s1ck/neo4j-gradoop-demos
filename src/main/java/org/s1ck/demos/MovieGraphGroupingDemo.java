@@ -55,7 +55,7 @@ public class MovieGraphGroupingDemo {
   public static final String NEO4J_PASSWORD = "password";
 
   public static final String NEO4J_VERTEX_QUERY =
-    "MATCH (n) RETURN id(n), labels(n)[0], CASE labels(n)[0] WHEN 'Person' THEN n.name WHEN 'Movie' THEN n.title END";
+    "MATCH (n) RETURN id(n), labels(n)[0], CASE WHEN n:Person THEN n.name WHEN n:Movie THEN n.title END";
 
   public static final String NEO4J_EDGE_QUERY =
     "MATCH (a)-[e]->(b) RETURN id(e), id(a), id(b), type(e)";
