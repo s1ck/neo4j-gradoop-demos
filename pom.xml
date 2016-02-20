@@ -73,6 +73,11 @@
             <version>${dep.gradoop.version}</version>
         </dependency>
         <dependency>
+            <groupId>org.gradoop</groupId>
+            <artifactId>gradoop-algorithms</artifactId>
+            <version>${dep.gradoop.version}</version>
+        </dependency>
+        <dependency>
             <groupId>org.s1ck</groupId>
             <artifactId>flink-neo4j</artifactId>
             <version>${dep.flink-neo4j.version}</version>
