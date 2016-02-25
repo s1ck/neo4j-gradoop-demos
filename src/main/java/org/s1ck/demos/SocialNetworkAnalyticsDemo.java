@@ -50,7 +50,7 @@ import org.gradoop.util.GradoopFlinkConfig;
  *
  * For more info on the data generator: https://github.com/ldbc/ldbc_snb_datagen
  */
-public class SocialNetworkGroupingDemo {
+public class SocialNetworkAnalyticsDemo {
 
   public static final String NEO4J_REST_URI = "http://localhost:7474/db/data/";
 
@@ -59,10 +59,14 @@ public class SocialNetworkGroupingDemo {
   public static final String NEO4J_PASSWORD = "password";
 
   public static final String NEO4J_VERTEX_QUERY =
-    "MATCH (n:person) RETURN id(n), n.gender, n.city, n.birthday";
+    "CYPHER RUNTIME=COMPILED " +
+      "MATCH (n:person) " +
+      "RETURN id(n), n.gender, n.city, n.birthday";
 
   public static final String NEO4J_EDGE_QUERY =
-    "MATCH (a:person)-[e]->(b:person) RETURN id(e), id(a), id(b), type(e)";
+    "CYPHER RUNTIME=COMPILED " +
+      "MATCH (a:person)-[e]->(b:person) " +
+      "RETURN id(e), id(a), id(b), type(e)";
 
   public static void main(String[] args) throws Exception {
     ExecutionEnvironment env = ExecutionEnvironment.getExecutionEnvironment();
@@ -109,10 +113,14 @@ public class SocialNetworkGroupingDemo {
     ExecutionEnvironment env) {
 
     Neo4jInputFormat<Tuple4<Integer, String, String, Long>> neoInput =
-      Neo4jInputFormat.buildNeo4jInputFormat().setRestURI(NEO4J_REST_URI)
-        .setCypherQuery(NEO4J_VERTEX_QUERY).setUsername(NEO4J_USERNAME)
-        .setPassword(NEO4J_PASSWORD).setConnectTimeout(10000)
-        .setReadTimeout(10000).finish();
+      Neo4jInputFormat.buildNeo4jInputFormat()
+        .setRestURI(NEO4J_REST_URI)
+        .setCypherQuery(NEO4J_VERTEX_QUERY)
+        .setUsername(NEO4J_USERNAME)
+        .setPassword(NEO4J_PASSWORD)
+        .setConnectTimeout(10000)
+        .setReadTimeout(10000)
+        .finish();
 
     DataSet<Tuple4<Integer, String, String, Long>> rows = env.createInput(neoInput,
       new TupleTypeInfo<Tuple4<Integer, String, String, Long>>(

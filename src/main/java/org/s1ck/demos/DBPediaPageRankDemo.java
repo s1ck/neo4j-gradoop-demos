@@ -42,7 +42,10 @@ public class DBPediaPageRankDemo {
 
   public static final String NEO4J_PASSWORD = "password";
 
-  public static final String NEO4J_EDGE_QUERY = "MATCH (p1:Page)-[:Link]->(p2) RETURN id(p1), id(p2)";
+  public static final String NEO4J_EDGE_QUERY =
+    "CYPHER RUNTIME=COMPILED " +
+      "MATCH (p1:Page)-[:Link]->(p2) " +
+      "RETURN id(p1), id(p2)";
 
   @SuppressWarnings("unchecked")
   public static void main(String[] args) throws Exception {
@@ -73,7 +76,10 @@ public class DBPediaPageRankDemo {
     // create Gelly graph and run Page Rank
     Graph<Integer, Double, Double> graph = Graph
       .fromTupleDataSet(edges, new VertexInitializer(), env);
+
     graph.run(new PageRank<Integer>(0.85, 5)).collect();
+
+    System.out.println(env.getLastJobExecutionResult().getNetRuntime());
   }
 
   private static class VertexInitializer implements MapFunction<Integer, Double> {
