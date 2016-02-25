@@ -23,11 +23,13 @@ import org.apache.flink.api.common.typeinfo.BasicTypeInfo;
 import org.apache.flink.api.java.DataSet;
 import org.apache.flink.api.java.ExecutionEnvironment;
 import org.apache.flink.api.java.io.neo4j.Neo4jInputFormat;
+import org.apache.flink.api.java.io.neo4j.Neo4jOutputFormat;
 import org.apache.flink.api.java.tuple.Tuple2;
 import org.apache.flink.api.java.tuple.Tuple3;
 import org.apache.flink.api.java.typeutils.TupleTypeInfo;
 import org.apache.flink.graph.Edge;
 import org.apache.flink.graph.Graph;
+import org.apache.flink.graph.Vertex;
 import org.apache.flink.graph.library.PageRank;
 
 /**
@@ -42,10 +44,20 @@ public class DBPediaPageRankDemo {
 
   public static final String NEO4J_PASSWORD = "password";
 
+  public static final Integer NEO4J_CONNECT_TIMEOUT = 10_000;
+
+  public static final Integer NEO4J_READ_TIMEOUT = 10_000;
+
   public static final String NEO4J_EDGE_QUERY =
     "CYPHER RUNTIME=COMPILED " +
       "MATCH (p1:Page)-[:Link]->(p2) " +
       "RETURN id(p1), id(p2)";
+
+  public static final String NEO4J_UPDATE_QUERY =
+    "UNWIND {updates} as update " +
+      "MATCH (p) " +
+      "WHERE id(p) = update.id " +
+      "SET p.pagerank = update.rank";
 
   @SuppressWarnings("unchecked")
   public static void main(String[] args) throws Exception {
@@ -57,8 +69,8 @@ public class DBPediaPageRankDemo {
       .setCypherQuery(NEO4J_EDGE_QUERY)
       .setUsername(NEO4J_USERNAME)
       .setPassword(NEO4J_PASSWORD)
-      .setConnectTimeout(10000)
-      .setReadTimeout(10000)
+      .setConnectTimeout(NEO4J_CONNECT_TIMEOUT)
+      .setReadTimeout(NEO4J_READ_TIMEOUT)
       .finish();
 
     // read edges and init with weight 1.0
@@ -77,7 +89,27 @@ public class DBPediaPageRankDemo {
     Graph<Integer, Double, Double> graph = Graph
       .fromTupleDataSet(edges, new VertexInitializer(), env);
 
-    graph.run(new PageRank<Integer>(0.85, 5)).collect();
+    DataSet<Vertex<Integer, Double>> ranks =
+      graph.run(new PageRank<Integer>(0.85, 5));
+
+    // write result back to Neo4j
+
+    Neo4jOutputFormat<Vertex<Integer, Double>> neoOutput = Neo4jOutputFormat
+      .buildNeo4jOutputFormat()
+      .setRestURI(NEO4J_REST_URI)
+      .setUsername(NEO4J_USERNAME)
+      .setPassword(NEO4J_PASSWORD)
+      .setConnectTimeout(NEO4J_CONNECT_TIMEOUT)
+      .setReadTimeout(NEO4J_READ_TIMEOUT)
+      .setCypherQuery(NEO4J_UPDATE_QUERY)
+      .addParameterKey("id")
+      .addParameterKey("rank")
+      .setTaskBatchSize(1000)
+      .finish();
+
+    ranks.output(neoOutput);
+
+    env.execute();
 
     System.out.println(env.getLastJobExecutionResult().getNetRuntime());
   }

@@ -58,6 +58,10 @@ public class SocialNetworkAnalyticsDemo {
 
   public static final String NEO4J_PASSWORD = "password";
 
+  public static final Integer NEO4J_CONNECT_TIMEOUT = 10_000;
+
+  public static final Integer NEO4J_READ_TIMEOUT = 10_000;
+
   public static final String NEO4J_VERTEX_QUERY =
     "CYPHER RUNTIME=COMPILED " +
       "MATCH (n:person) " +
@@ -118,8 +122,8 @@ public class SocialNetworkAnalyticsDemo {
         .setCypherQuery(NEO4J_VERTEX_QUERY)
         .setUsername(NEO4J_USERNAME)
         .setPassword(NEO4J_PASSWORD)
-        .setConnectTimeout(10000)
-        .setReadTimeout(10000)
+        .setConnectTimeout(NEO4J_CONNECT_TIMEOUT)
+        .setReadTimeout(NEO4J_READ_TIMEOUT)
         .finish();
 
     DataSet<Tuple4<Integer, String, String, Long>> rows = env.createInput(neoInput,
@@ -141,8 +145,8 @@ public class SocialNetworkAnalyticsDemo {
         .setCypherQuery(NEO4J_EDGE_QUERY)
         .setUsername(NEO4J_USERNAME)
         .setPassword(NEO4J_PASSWORD)
-        .setConnectTimeout(10000)
-        .setReadTimeout(10000)
+        .setConnectTimeout(NEO4J_CONNECT_TIMEOUT)
+        .setReadTimeout(NEO4J_READ_TIMEOUT)
         .finish();
 
     DataSource<Tuple4<Integer, Integer, Integer, String>> rows = env
