@@ -71,7 +71,7 @@ public class SocialNetworkAnalyticsDemo {
   public static final String NEO4J_VERTEX_QUERY =
     "CYPHER RUNTIME=COMPILED " +
       "MATCH (n:person) " +
-      "RETURN id(n), n.gender, n.city, n.birthday";
+      "RETURN id(n), n.gender, n.city";
 
   public static final String NEO4J_EDGE_QUERY =
     "CYPHER RUNTIME=COMPILED " +
@@ -90,20 +90,22 @@ public class SocialNetworkAnalyticsDemo {
   public static void main(String[] args) throws Exception {
     ExecutionEnvironment env = ExecutionEnvironment.getExecutionEnvironment();
 
+    final String externalIdKey = "_id";
+
     // enter Gradoop
     EPGMDatabase<GraphHeadPojo, VertexPojo, EdgePojo> epgmDatabase =
       EPGMDatabase.fromExternalGraph(
         // get vertices from Neo4j
         getImportVertices(env),
         // get edges from Neo4j
-        getImportEdges(env), GradoopFlinkConfig.createDefaultConfig(env));
+        getImportEdges(env), externalIdKey, GradoopFlinkConfig.createDefaultConfig(env));
 
     LogicalGraph<GraphHeadPojo, VertexPojo, EdgePojo> groupedGraph =
       epgmDatabase.getDatabaseGraph()
         // run community detection using 'birthday' property as propagation value
-        .callForGraph(new GellyLabelPropagation<GraphHeadPojo, VertexPojo, EdgePojo>(4, "birthday"))
+        .callForGraph(new GellyLabelPropagation<GraphHeadPojo, VertexPojo, EdgePojo>(4, externalIdKey))
         // split the resulting graph into a graph collection
-        .splitBy("birthday")
+        .splitBy(externalIdKey)
         // compute vertex counts for each community
         .apply(new ApplyAggregation<>("vertexCount", new VertexCount<GraphHeadPojo, VertexPojo, EdgePojo>()))
         // select communities with more than 50 users
@@ -134,12 +136,11 @@ public class SocialNetworkAnalyticsDemo {
     System.out.println(String.format("Took: %d ms", env.getLastJobExecutionResult().getNetRuntime()));
   }
 
-
   @SuppressWarnings("unchecked")
   public static DataSet<ImportVertex<Integer>> getImportVertices(
     ExecutionEnvironment env) {
 
-    Neo4jInputFormat<Tuple4<Integer, String, String, Long>> neoInput =
+    Neo4jInputFormat<Tuple3<Integer, String, String>> neoInput =
       Neo4jInputFormat.buildNeo4jInputFormat()
         .setRestURI(NEO4J_INPUT_REST_URI)
         .setCypherQuery(NEO4J_VERTEX_QUERY)
@@ -149,12 +150,11 @@ public class SocialNetworkAnalyticsDemo {
         .setReadTimeout(NEO4J_READ_TIMEOUT)
         .finish();
 
-    DataSet<Tuple4<Integer, String, String, Long>> rows = env.createInput(neoInput,
-      new TupleTypeInfo<Tuple4<Integer, String, String, Long>>(
+    DataSet<Tuple3<Integer, String, String>> rows = env.createInput(neoInput,
+      new TupleTypeInfo<Tuple3<Integer, String, String>>(
         BasicTypeInfo.INT_TYPE_INFO,      // vertex id
         BasicTypeInfo.STRING_TYPE_INFO,   // vertex property gender
-        BasicTypeInfo.STRING_TYPE_INFO,   // vertex property city
-        BasicTypeInfo.LONG_TYPE_INFO));   // vertex property birthday
+        BasicTypeInfo.STRING_TYPE_INFO)); // vertex property city
 
     return rows.map(new BuildImportVertex());
   }
@@ -249,19 +249,18 @@ public class SocialNetworkAnalyticsDemo {
   }
 
   public static class BuildImportVertex implements
-    MapFunction<Tuple4<Integer, String, String, Long>, ImportVertex<Integer>> {
+    MapFunction<Tuple3<Integer, String, String>, ImportVertex<Integer>> {
 
     private final ImportVertex<Integer> importVertex = new ImportVertex<>();
 
     @Override
-    public ImportVertex<Integer> map(Tuple4<Integer, String, String, Long> row)
+    public ImportVertex<Integer> map(Tuple3<Integer, String, String> row)
       throws Exception {
       importVertex.setId(row.f0);
       importVertex.setLabel("Person");
       PropertyList properties = PropertyList.createWithCapacity(2);
       properties.set("gender", row.f1);
       properties.set("city", row.f2);
-      properties.set("birthday", row.f3);
       importVertex.setProperties(properties);
       return importVertex;
     }
