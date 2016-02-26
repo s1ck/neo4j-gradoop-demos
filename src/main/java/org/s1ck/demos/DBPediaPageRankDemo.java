@@ -104,7 +104,7 @@ public class DBPediaPageRankDemo {
       .setCypherQuery(NEO4J_UPDATE_QUERY)
       .addParameterKey("id")
       .addParameterKey("rank")
-      .setTaskBatchSize(1000)
+      .setTaskBatchSize(10_000)
       .finish();
 
     ranks.output(neoOutput);

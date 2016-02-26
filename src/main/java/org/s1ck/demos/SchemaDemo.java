@@ -18,24 +18,25 @@
 
 package org.s1ck.demos;
 
+import org.apache.flink.api.common.functions.JoinFunction;
 import org.apache.flink.api.common.functions.MapFunction;
 import org.apache.flink.api.common.typeinfo.BasicTypeInfo;
 import org.apache.flink.api.java.DataSet;
 import org.apache.flink.api.java.ExecutionEnvironment;
 import org.apache.flink.api.java.io.neo4j.Neo4jInputFormat;
+import org.apache.flink.api.java.io.neo4j.Neo4jOutputFormat;
 import org.apache.flink.api.java.operators.DataSource;
+import org.apache.flink.api.java.tuple.Tuple2;
 import org.apache.flink.api.java.tuple.Tuple3;
 import org.apache.flink.api.java.tuple.Tuple4;
+import org.apache.flink.api.java.tuple.Tuple8;
 import org.apache.flink.api.java.typeutils.TupleTypeInfo;
 import org.gradoop.io.graph.tuples.ImportEdge;
 import org.gradoop.io.graph.tuples.ImportVertex;
 import org.gradoop.model.impl.EPGMDatabase;
-import org.gradoop.model.impl.GraphCollection;
 import org.gradoop.model.impl.LogicalGraph;
-import org.gradoop.model.impl.operators.tostring.CanonicalAdjacencyMatrixBuilder;
-import org.gradoop.model.impl.operators.tostring.functions.EdgeToDataString;
-import org.gradoop.model.impl.operators.tostring.functions.GraphHeadToEmptyString;
-import org.gradoop.model.impl.operators.tostring.functions.VertexToDataString;
+import org.gradoop.model.impl.functions.epgm.Id;
+import org.gradoop.model.impl.functions.epgm.SourceId;
 import org.gradoop.model.impl.pojo.EdgePojo;
 import org.gradoop.model.impl.pojo.GraphHeadPojo;
 import org.gradoop.model.impl.pojo.VertexPojo;
@@ -43,12 +44,16 @@ import org.gradoop.model.impl.properties.PropertyList;
 import org.gradoop.util.GradoopFlinkConfig;
 
 /**
- * Reads the movie example graph from Neo4j into Gradoop and groups it based
- * on vertex and edge labels.
+ * Extracts the labels of vertices and edges from a Neo4j database and creates
+ * a schema graph which is written back to another Neo4j instance. Each vertex
+ * and edge in the schema graph stores the number of vertices and edges in the
+ * source graph with the same label.
  */
-public class MovieGraphGroupingDemo {
+public class SchemaDemo {
 
-  public static final String NEO4J_REST_URI = "http://localhost:7474/db/data/";
+  public static final String NEO4J_INPUT_REST_URI = "http://localhost:7474/db/data/";
+
+  public static final String NEO4J_OUTPUT_REST_URI = "http://localhost:4242/db/data/";
 
   public static final String NEO4J_USERNAME = "neo4j";
 
@@ -61,13 +66,18 @@ public class MovieGraphGroupingDemo {
   public static final String NEO4J_VERTEX_QUERY =
     "CYPHER RUNTIME=COMPILED " +
       "MATCH (n) " +
-      "RETURN id(n), labels(n)[0], " +
-      "CASE WHEN n:Person THEN n.name WHEN n:Movie THEN n.title END";
+      "RETURN id(n), labels(n)[0]";
 
   public static final String NEO4J_EDGE_QUERY =
     "CYPHER RUNTIME=COMPILED " +
       "MATCH (a)-[e]->(b) " +
       "RETURN id(e), id(a), id(b), type(e)";
+
+  public static final String NEO4J_CREATE_QUERY = "" +
+    "UNWIND {triples} as t " +
+    "MERGE (a:SchemaNode {epgmId : t.f, label : t.fL, count : t.fC}) " +
+    "MERGE (b:SchemaNode {epgmId : t.t, label : t.tL, count : t.tC}) " +
+    "CREATE (a)-[:SchemaEdge {label : t.eL, count : t.eC}]->(b)";
 
   @SuppressWarnings("unchecked")
   public static void main(String[] args) throws Exception {
@@ -90,13 +100,10 @@ public class MovieGraphGroupingDemo {
     LogicalGraph<GraphHeadPojo, VertexPojo, EdgePojo> groupedGraph =
       databaseGraph.groupByVertexAndEdgeLabel();
 
-    // print canonical label of the graph
-    new CanonicalAdjacencyMatrixBuilder<>(
-      new GraphHeadToEmptyString<GraphHeadPojo>(),
-      new VertexToDataString<VertexPojo>(),
-      new EdgeToDataString<EdgePojo>())
-      .execute(GraphCollection.fromGraph(groupedGraph))
-      .print();
+    // write graph back to Neo4j
+    writeTriplets(buildTriplet(groupedGraph));
+
+    env.execute();
 
     System.out.println(env.getLastJobExecutionResult().getNetRuntime());
   }
@@ -104,9 +111,9 @@ public class MovieGraphGroupingDemo {
   @SuppressWarnings("unchecked")
   public static DataSet<ImportVertex<Integer>> getImportVertices(ExecutionEnvironment env) {
 
-    Neo4jInputFormat<Tuple3<Integer, String, String>> neoInput =
+    Neo4jInputFormat<Tuple2<Integer, String>> neoInput =
       Neo4jInputFormat.buildNeo4jInputFormat()
-        .setRestURI(NEO4J_REST_URI)
+        .setRestURI(NEO4J_INPUT_REST_URI)
         .setCypherQuery(NEO4J_VERTEX_QUERY)
         .setUsername(NEO4J_USERNAME)
         .setPassword(NEO4J_PASSWORD)
@@ -114,21 +121,20 @@ public class MovieGraphGroupingDemo {
         .setReadTimeout(NEO4J_READ_TIMEOUT)
         .finish();
 
-    DataSet<Tuple3<Integer, String, String>> rows = env.createInput(neoInput,
-      new TupleTypeInfo<Tuple3<Integer, String, String>>(
+    DataSet<Tuple2<Integer, String>> rows = env.createInput(neoInput,
+      new TupleTypeInfo<Tuple2<Integer, String>>(
         BasicTypeInfo.INT_TYPE_INFO,       // vertex id
-        BasicTypeInfo.STRING_TYPE_INFO,    // vertex label
-        BasicTypeInfo.STRING_TYPE_INFO));  // vertex property 'name' or 'title'
+        BasicTypeInfo.STRING_TYPE_INFO));  // vertex label
 
-    return rows.map(new MapFunction<Tuple3<Integer, String, String>, ImportVertex<Integer>>() {
+
+    return rows.map(new MapFunction<Tuple2<Integer, String>, ImportVertex<Integer>>() {
       @Override
-      public ImportVertex<Integer> map(Tuple3<Integer, String, String> row) throws
+      public ImportVertex<Integer> map(Tuple2<Integer, String> row) throws
         Exception {
         ImportVertex<Integer> importVertex = new ImportVertex<>();
         importVertex.setId(row.f0);
         importVertex.setLabel(row.f1);
-        PropertyList properties = PropertyList.createWithCapacity(1);
-        properties.set(row.f1.equals("Person") ? "name" : "title", row.f2);
+        PropertyList properties = PropertyList.createWithCapacity(0);
         importVertex.setProperties(properties);
 
         return importVertex;
@@ -140,7 +146,7 @@ public class MovieGraphGroupingDemo {
   public static DataSet<ImportEdge<Integer>> getImportEdges(ExecutionEnvironment env) {
     Neo4jInputFormat<Tuple4<Integer, Integer, Integer, String>> neoInput =
       Neo4jInputFormat.buildNeo4jInputFormat()
-        .setRestURI(NEO4J_REST_URI)
+        .setRestURI(NEO4J_INPUT_REST_URI)
         .setCypherQuery(NEO4J_EDGE_QUERY)
         .setUsername(NEO4J_USERNAME)
         .setPassword(NEO4J_PASSWORD)
@@ -170,5 +176,69 @@ public class MovieGraphGroupingDemo {
         return importEdge;
       }
     });
+  }
+
+  public static DataSet<Tuple3<VertexPojo, EdgePojo, VertexPojo>> buildTriplet(LogicalGraph<GraphHeadPojo, VertexPojo, EdgePojo> graph) {
+    return graph.getVertices()
+      .join(graph.getEdges())
+      .where(new Id<VertexPojo>()).equalTo(new SourceId<EdgePojo>())
+      .with(new JoinFunction<VertexPojo, EdgePojo, Tuple2<VertexPojo, EdgePojo>>() {
+
+        @Override
+        public Tuple2<VertexPojo, EdgePojo> join(VertexPojo vertexPojo,
+          EdgePojo edgePojo) throws Exception {
+          return new Tuple2<>(vertexPojo, edgePojo);
+        }
+      })
+      .join(graph.getVertices())
+      .where("1.targetId").equalTo(new Id<VertexPojo>())
+      .with(new JoinFunction<Tuple2<VertexPojo,EdgePojo>, VertexPojo, Tuple3<VertexPojo, EdgePojo, VertexPojo>>() {
+
+        @Override
+        public Tuple3<VertexPojo, EdgePojo, VertexPojo> join(
+          Tuple2<VertexPojo, EdgePojo> sourceVertexAndEdge,
+          VertexPojo targetVertex) throws Exception {
+          return new Tuple3<>(
+            sourceVertexAndEdge.f0, sourceVertexAndEdge.f1, targetVertex);
+        }
+      });
+  }
+
+  @SuppressWarnings("unchecked")
+  public static void writeTriplets(DataSet<Tuple3<VertexPojo, EdgePojo, VertexPojo>> triplets) {
+    triplets.map(new MapFunction<Tuple3<VertexPojo,EdgePojo,VertexPojo>,
+      Tuple8<String, String, Long, String, String, Long, String, Long>>() {
+
+      @Override
+      public Tuple8<String, String, Long, String, String, Long, String, Long> map(
+        Tuple3<VertexPojo, EdgePojo, VertexPojo> triplet) throws Exception {
+        return new Tuple8<>(
+          triplet.f0.getId().toString(),
+          triplet.f0.getLabel(),
+          triplet.f0.getPropertyValue("count").getLong(),
+          triplet.f2.getId().toString(),
+          triplet.f2.getLabel(),
+          triplet.f2.getPropertyValue("count").getLong(),
+          triplet.f1.getLabel(),
+          triplet.f1.getPropertyValue("count").getLong()
+        );
+      }
+    }).output(Neo4jOutputFormat.buildNeo4jOutputFormat()
+      .setRestURI(NEO4J_OUTPUT_REST_URI)
+      .setUsername(NEO4J_USERNAME)
+      .setPassword(NEO4J_PASSWORD)
+      .setConnectTimeout(NEO4J_CONNECT_TIMEOUT)
+      .setReadTimeout(NEO4J_READ_TIMEOUT)
+      .setCypherQuery(NEO4J_CREATE_QUERY)
+      .addParameterKey(0, "f")  // from
+      .addParameterKey(1, "fL") // from label
+      .addParameterKey(2, "fC") // from count
+      .addParameterKey(3, "t")  // to
+      .addParameterKey(4, "tL") // to label
+      .addParameterKey(5, "tC") // to count
+      .addParameterKey(6, "eL") // edge label
+      .addParameterKey(7, "eC") // edge count
+      .finish())
+      .setParallelism(1);
   }
 }
