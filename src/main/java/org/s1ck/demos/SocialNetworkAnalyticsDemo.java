@@ -90,6 +90,7 @@ public class SocialNetworkAnalyticsDemo {
   public static void main(String[] args) throws Exception {
     ExecutionEnvironment env = ExecutionEnvironment.getExecutionEnvironment();
 
+    // used to store external identifiers at the EPGM vertices/edges
     final String externalIdKey = "_id";
 
     // enter Gradoop
@@ -98,11 +99,15 @@ public class SocialNetworkAnalyticsDemo {
         // get vertices from Neo4j
         getImportVertices(env),
         // get edges from Neo4j
-        getImportEdges(env), externalIdKey, GradoopFlinkConfig.createDefaultConfig(env));
+        getImportEdges(env),
+        // store the external (Neo4j) identifier at the vertices / edges
+        externalIdKey,
+        // use default gradoop config
+        GradoopFlinkConfig.createDefaultConfig(env));
 
     LogicalGraph<GraphHeadPojo, VertexPojo, EdgePojo> groupedGraph =
       epgmDatabase.getDatabaseGraph()
-        // run community detection using 'birthday' property as propagation value
+        // run community detection using '_id' property as propagation value
         .callForGraph(new GellyLabelPropagation<GraphHeadPojo, VertexPojo, EdgePojo>(4, externalIdKey))
         // split the resulting graph into a graph collection
         .splitBy(externalIdKey)
