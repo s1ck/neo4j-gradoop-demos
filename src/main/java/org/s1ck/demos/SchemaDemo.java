@@ -101,7 +101,7 @@ public class SchemaDemo {
       databaseGraph.groupByVertexAndEdgeLabel();
 
     // write graph back to Neo4j
-    writeTriplets(buildTriplet(groupedGraph));
+    writeTriplets(buildTriplets(groupedGraph));
 
     env.execute();
 
@@ -178,7 +178,8 @@ public class SchemaDemo {
     });
   }
 
-  public static DataSet<Tuple3<VertexPojo, EdgePojo, VertexPojo>> buildTriplet(LogicalGraph<GraphHeadPojo, VertexPojo, EdgePojo> graph) {
+  public static DataSet<Tuple3<VertexPojo, EdgePojo, VertexPojo>> buildTriplets(
+    LogicalGraph<GraphHeadPojo, VertexPojo, EdgePojo> graph) {
     return graph.getVertices()
       .join(graph.getEdges())
       .where(new Id<VertexPojo>()).equalTo(new SourceId<EdgePojo>())

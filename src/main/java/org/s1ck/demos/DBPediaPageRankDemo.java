@@ -111,8 +111,7 @@ public class DBPediaPageRankDemo {
 
     env.execute();
 
-    System.out.println(env.getLastJobExecutionResult().getNetRuntime());
-  }
+    System.out.println(String.format("Took: %d ms", env.getLastJobExecutionResult().getNetRuntime()));  }
 
   private static class VertexInitializer implements MapFunction<Integer, Double> {
 
