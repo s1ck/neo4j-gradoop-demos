@@ -36,9 +36,8 @@ import org.gradoop.io.graph.tuples.ImportEdge;
 import org.gradoop.io.graph.tuples.ImportVertex;
 import org.gradoop.model.impl.EPGMDatabase;
 import org.gradoop.model.impl.LogicalGraph;
-import org.gradoop.model.impl.algorithms.labelpropagation.GellyLabelPropagation;
+import org.gradoop.model.impl.algorithms.labelpropagation.GradoopLabelPropagation;
 import org.gradoop.model.impl.operators.aggregation.ApplyAggregation;
-import org.gradoop.model.impl.operators.aggregation.functions.EdgeCount;
 import org.gradoop.model.impl.operators.aggregation.functions.VertexCount;
 import org.gradoop.model.impl.operators.combination.ReduceCombination;
 import org.gradoop.model.impl.pojo.EdgePojo;
@@ -50,11 +49,11 @@ import org.gradoop.util.GradoopFlinkConfig;
 /**
  * Demo is using the LDBC SNB social network graph to read a subgraph from Neo4j
  * into Flink and uses Gradoop to perform graph analytics. See {@link #main} for
- * details. The resulting graph is written to Neo4j to be further analyzed.
+ * details. The resulting graph is written to Neo4j for visualization / inspection.
  *
  * For more info on the data generator: https://github.com/ldbc/ldbc_snb_datagen
  */
-public class SocialNetworkAnalyticsDemo {
+public class CommunityRollUpDemo {
 
   public static final String NEO4J_INPUT_REST_URI = "http://localhost:7474/db/data/";
 
@@ -71,7 +70,7 @@ public class SocialNetworkAnalyticsDemo {
   public static final String NEO4J_VERTEX_QUERY =
     "CYPHER RUNTIME=COMPILED " +
       "MATCH (n:person) " +
-      "RETURN id(n), n.gender, n.city";
+      "RETURN id(n), n.gender";
 
   public static final String NEO4J_EDGE_QUERY =
     "CYPHER RUNTIME=COMPILED " +
@@ -80,18 +79,18 @@ public class SocialNetworkAnalyticsDemo {
 
   public static final String NEO4J_CREATE_VERTEX_QUERY =
     "UNWIND {vertices} AS v " +
-      "CREATE (a:UserGroup {epgmId: v.i, city: v.c, gender : v.g, count: v.cnt})";
+      "CREATE (a:UserGroup {epgmId: v.i, community: v.c, gender : v.g, count: v.cnt})";
 
   public static final String NEO4J_CREATE_EDGE_QUERY =
     "UNWIND {edges} AS e " +
       "MATCH (a:UserGroup {epgmId:e.f}), (b:UserGroup {epgmId:e.t}) " +
       "CREATE (a)-[:KNOWS {count:e.c}]->(b)";
 
+  // used to store external identifiers at the EPGM vertices/edges
+  public static final String EXTERNAL_ID_KEY = "_id";
+
   public static void main(String[] args) throws Exception {
     ExecutionEnvironment env = ExecutionEnvironment.getExecutionEnvironment();
-
-    // used to store external identifiers at the EPGM vertices/edges
-    final String externalIdKey = "_id";
 
     // enter Gradoop
     EPGMDatabase<GraphHeadPojo, VertexPojo, EdgePojo> epgmDatabase =
@@ -101,42 +100,35 @@ public class SocialNetworkAnalyticsDemo {
         // get edges from Neo4j
         getImportEdges(env),
         // store the external (Neo4j) identifier at the vertices / edges
-        externalIdKey,
+        EXTERNAL_ID_KEY,
         // use default gradoop config
         GradoopFlinkConfig.createDefaultConfig(env));
 
     LogicalGraph<GraphHeadPojo, VertexPojo, EdgePojo> groupedGraph =
       epgmDatabase.getDatabaseGraph()
-        // run community detection using '_id' property as propagation value
-        .callForGraph(new GellyLabelPropagation<GraphHeadPojo, VertexPojo, EdgePojo>(4, externalIdKey))
+        // run community detection using the external id as propagation value
+        .callForGraph(new GradoopLabelPropagation<GraphHeadPojo, VertexPojo, EdgePojo>(4, EXTERNAL_ID_KEY))
         // split the resulting graph into a graph collection
-        .splitBy(externalIdKey)
+        .splitBy(EXTERNAL_ID_KEY)
         // compute vertex counts for each community
         .apply(new ApplyAggregation<>("vertexCount", new VertexCount<GraphHeadPojo, VertexPojo, EdgePojo>()))
-        // select communities with more than 50 users
+        // select communities with more than 100 users
         .select(new FilterFunction<GraphHeadPojo>() {
           @Override
           public boolean filter(GraphHeadPojo graphHead) throws Exception {
-            return graphHead.getPropertyValue("vertexCount").getLong() > 50;
+            return graphHead.getPropertyValue("vertexCount").getLong() > 100;
           }
         })
         // combine those communities to a single graph
         .reduce(new ReduceCombination<GraphHeadPojo, VertexPojo, EdgePojo>())
-        // group the graph
-        .groupBy(Lists.newArrayList("city", "gender"))
-        // compute number of vertices
-        .aggregate("vertexCount", new VertexCount<GraphHeadPojo, VertexPojo, EdgePojo>())
-        // compute number of edges
-        .aggregate("edgeCount", new EdgeCount<GraphHeadPojo, VertexPojo, EdgePojo>());
+        // group the graph by community id and and gender
+        .groupBy(Lists.newArrayList("gender", EXTERNAL_ID_KEY));
 
-    // write graph back to Neo4j
+    // write vertices and edges to Neo4j
     DataSet<BooleanValue> done = writeVertices(groupedGraph.getVertices());
     writeEdges(groupedGraph.getEdges(), done);
 
     env.execute();
-
-    // or write to JSON
-//    result.writeAsJson("output/vertices.json", "output/edges.json", "output/graphHeads.json");
 
     System.out.println(String.format("Took: %d ms", env.getLastJobExecutionResult().getNetRuntime()));
   }
@@ -190,12 +182,12 @@ public class SocialNetworkAnalyticsDemo {
 
   @SuppressWarnings("unchecked")
   public static DataSet<BooleanValue> writeVertices(DataSet<VertexPojo> vertices) {
-    return vertices.map(new MapFunction<VertexPojo, Tuple4<String, String, String, Long>>() {
+    return vertices.map(new MapFunction<VertexPojo, Tuple4<String, Integer, String, Long>>() {
       @Override
-      public Tuple4<String, String, String, Long> map(VertexPojo v) throws Exception {
+      public Tuple4<String, Integer, String, Long> map(VertexPojo v) throws Exception {
         return new Tuple4<>(
           v.getId().toString(),
-          v.getPropertyValue("city").getString(),
+          v.getPropertyValue(EXTERNAL_ID_KEY).getInt(),
           v.getPropertyValue("gender").getString(),
           v.getPropertyValue("count").getLong());
       }
@@ -206,17 +198,17 @@ public class SocialNetworkAnalyticsDemo {
       .setConnectTimeout(NEO4J_CONNECT_TIMEOUT)
       .setReadTimeout(NEO4J_READ_TIMEOUT)
       .setCypherQuery(NEO4J_CREATE_VERTEX_QUERY)
-      .addParameterKey("i")
-      .addParameterKey("c")
-      .addParameterKey("g")
-      .addParameterKey("cnt")
+      .addParameterKey("i")   // epgmId
+      .addParameterKey("c")  // communityId
+      .addParameterKey("g")   // gender
+      .addParameterKey("cnt") // count
       .finish())
       // compute a dummy 1-element dataset which is used to start writing the edges
       .getDataSet()
-      .map(new MapFunction<Tuple4<String,String,String,Long>, BooleanValue>() {
+      .map(new MapFunction<Tuple4<String, Integer, String, Long>, BooleanValue>() {
         @Override
         public BooleanValue map(
-          Tuple4<String, String, String, Long> t) throws Exception {
+          Tuple4<String, Integer, String, Long> t) throws Exception {
           return BooleanValue.TRUE;
         }
       })
@@ -288,6 +280,4 @@ public class SocialNetworkAnalyticsDemo {
       return importEdge;
     }
   }
-
-
 }
