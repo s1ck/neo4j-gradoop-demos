@@ -21,7 +21,6 @@ package org.s1ck.demos;
 import com.google.common.collect.Lists;
 import org.apache.flink.api.common.functions.FilterFunction;
 import org.apache.flink.api.common.functions.MapFunction;
-import org.apache.flink.api.common.functions.ReduceFunction;
 import org.apache.flink.api.common.typeinfo.BasicTypeInfo;
 import org.apache.flink.api.java.DataSet;
 import org.apache.flink.api.java.ExecutionEnvironment;
@@ -30,8 +29,8 @@ import org.apache.flink.api.java.io.neo4j.Neo4jOutputFormat;
 import org.apache.flink.api.java.operators.DataSource;
 import org.apache.flink.api.java.tuple.Tuple3;
 import org.apache.flink.api.java.tuple.Tuple4;
+import org.apache.flink.api.java.tuple.Tuple9;
 import org.apache.flink.api.java.typeutils.TupleTypeInfo;
-import org.apache.flink.types.BooleanValue;
 import org.gradoop.io.graph.tuples.ImportEdge;
 import org.gradoop.io.graph.tuples.ImportVertex;
 import org.gradoop.model.impl.EPGMDatabase;
@@ -63,54 +62,67 @@ public class CommunityRollUpDemo {
 
   public static final String NEO4J_PASSWORD = "password";
 
-  public static final Integer NEO4J_CONNECT_TIMEOUT = 60_000;
+  public static final Integer NEO4J_CONNECT_TIMEOUT = 10_000;
 
-  public static final Integer NEO4J_READ_TIMEOUT = 60_000;
+  public static final Integer NEO4J_READ_TIMEOUT = 10_000;
 
+  /**
+   * Read all vertices of type 'person', return their id and property 'gender'
+   */
   public static final String NEO4J_VERTEX_QUERY =
     "CYPHER RUNTIME=COMPILED " +
       "MATCH (n:person) " +
       "RETURN id(n), n.gender";
 
+  /**
+   * Read all edges of type 'knows' between vertices of type 'person', return
+   * edge id, source vertex id and target vertex id
+   */
   public static final String NEO4J_EDGE_QUERY =
     "CYPHER RUNTIME=COMPILED " +
       "MATCH (a:person)-[e]->(b:person) " +
       "RETURN id(e), id(a), id(b), type(e)";
 
-  public static final String NEO4J_CREATE_VERTEX_QUERY =
-    "UNWIND {vertices} AS v " +
-      "CREATE (a:UserGroup {epgmId: v.i, community: v.c, gender : v.g, count: v.cnt})";
-
-  public static final String NEO4J_CREATE_EDGE_QUERY =
-    "UNWIND {edges} AS e " +
-      "MATCH (a:UserGroup {epgmId:e.f}), (b:UserGroup {epgmId:e.t}) " +
-      "CREATE (a)-[:KNOWS {count:e.c}]->(b)";
+  /**
+   * Create a new graph from insert tuples representing edges. Each tuple
+   * consists of:
+   *
+   * - source EPGM id, community id, gender and count
+   * - target EPGM id, community id, gender and count
+   * - edge and count
+   */
+  public static final String NEO4J_CREATE_QUERY = "" +
+    "UNWIND {tuples} as t " +
+    "MERGE (a:UserGroup {epgmId : t.f, community : t.fC, gender : t.fG, count : t.fCnt}) " +
+    "MERGE (b:UserGroup {epgmId : t.t, community : t.tC, gender : t.tG, count : t.tCnt}) " +
+    "CREATE (a)-[:KNOWS {count : t.eCnt}]->(b)";
 
   // used to store external identifiers at the EPGM vertices/edges
-  public static final String EXTERNAL_ID_KEY = "_id";
+  public static final String COMMUNITY_KEY = "_id";
 
   public static void main(String[] args) throws Exception {
+
     ExecutionEnvironment env = ExecutionEnvironment.getExecutionEnvironment();
 
-    // enter Gradoop
+    // initialize Gradoop database from Neo4j graph
     EPGMDatabase<GraphHeadPojo, VertexPojo, EdgePojo> epgmDatabase =
       EPGMDatabase.fromExternalGraph(
         // get vertices from Neo4j
         getImportVertices(env),
         // get edges from Neo4j
         getImportEdges(env),
-        // store the external (Neo4j) identifier at the vertices / edges
-        EXTERNAL_ID_KEY,
+        // store the external (Neo4j) identifier at the vertices / edges using that key
+        COMMUNITY_KEY,
         // use default gradoop config
         GradoopFlinkConfig.createDefaultConfig(env));
 
     LogicalGraph<GraphHeadPojo, VertexPojo, EdgePojo> groupedGraph =
       epgmDatabase.getDatabaseGraph()
         // run community detection using the external id as propagation value
-        .callForGraph(new GradoopLabelPropagation<GraphHeadPojo, VertexPojo, EdgePojo>(4, EXTERNAL_ID_KEY))
-        // split the resulting graph into a graph collection
-        .splitBy(EXTERNAL_ID_KEY)
-        // compute vertex counts for each community
+        .callForGraph(new GradoopLabelPropagation<GraphHeadPojo, VertexPojo, EdgePojo>(4, COMMUNITY_KEY))
+        // split the resulting graph into a graph collection using the community id
+        .splitBy(COMMUNITY_KEY)
+        // compute vertex count for each community
         .apply(new ApplyAggregation<>("vertexCount", new VertexCount<GraphHeadPojo, VertexPojo, EdgePojo>()))
         // select communities with more than 100 users
         .select(new FilterFunction<GraphHeadPojo>() {
@@ -121,12 +133,11 @@ public class CommunityRollUpDemo {
         })
         // combine those communities to a single graph
         .reduce(new ReduceCombination<GraphHeadPojo, VertexPojo, EdgePojo>())
-        // group the graph by community id and and gender
-        .groupBy(Lists.newArrayList("gender", EXTERNAL_ID_KEY));
+        // group the graph by vertex properties 'community id' and 'gender'
+        .groupBy(Lists.newArrayList("gender", COMMUNITY_KEY));
 
     // write vertices and edges to Neo4j
-    DataSet<BooleanValue> done = writeVertices(groupedGraph.getVertices());
-    writeEdges(groupedGraph.getEdges(), done);
+    writeTriplets(Utils.buildTriplets(groupedGraph));
 
     env.execute();
 
@@ -181,15 +192,22 @@ public class CommunityRollUpDemo {
   }
 
   @SuppressWarnings("unchecked")
-  public static DataSet<BooleanValue> writeVertices(DataSet<VertexPojo> vertices) {
-    return vertices.map(new MapFunction<VertexPojo, Tuple4<String, Integer, String, Long>>() {
+  public static void writeTriplets(DataSet<Tuple3<VertexPojo, EdgePojo, VertexPojo>> triplets) {
+    triplets.map(new MapFunction<Tuple3<VertexPojo,EdgePojo,VertexPojo>, Tuple9<String, Integer, String, Long, String, Integer, String, Long, Long>>() {
       @Override
-      public Tuple4<String, Integer, String, Long> map(VertexPojo v) throws Exception {
-        return new Tuple4<>(
-          v.getId().toString(),
-          v.getPropertyValue(EXTERNAL_ID_KEY).getInt(),
-          v.getPropertyValue("gender").getString(),
-          v.getPropertyValue("count").getLong());
+      public Tuple9<String, Integer, String, Long, String, Integer, String, Long, Long> map(
+        Tuple3<VertexPojo, EdgePojo, VertexPojo> triplet) throws Exception {
+        return new Tuple9<>(
+          triplet.f0.getId().toString(),
+          triplet.f0.getPropertyValue(COMMUNITY_KEY).getInt(),
+          triplet.f0.getPropertyValue("gender").getString(),
+          triplet.f0.getPropertyValue("count").getLong(),
+          triplet.f2.getId().toString(),
+          triplet.f2.getPropertyValue(COMMUNITY_KEY).getInt(),
+          triplet.f2.getPropertyValue("gender").getString(),
+          triplet.f2.getPropertyValue("count").getLong(),
+          triplet.f1.getPropertyValue("count").getLong()
+        );
       }
     }).output(Neo4jOutputFormat.buildNeo4jOutputFormat()
       .setRestURI(NEO4J_OUTPUT_REST_URI)
@@ -197,52 +215,17 @@ public class CommunityRollUpDemo {
       .setPassword(NEO4J_PASSWORD)
       .setConnectTimeout(NEO4J_CONNECT_TIMEOUT)
       .setReadTimeout(NEO4J_READ_TIMEOUT)
-      .setCypherQuery(NEO4J_CREATE_VERTEX_QUERY)
-      .addParameterKey("i")   // epgmId
-      .addParameterKey("c")  // communityId
-      .addParameterKey("g")   // gender
-      .addParameterKey("cnt") // count
-      .finish())
-      // compute a dummy 1-element dataset which is used to start writing the edges
-      .getDataSet()
-      .map(new MapFunction<Tuple4<String, Integer, String, Long>, BooleanValue>() {
-        @Override
-        public BooleanValue map(
-          Tuple4<String, Integer, String, Long> t) throws Exception {
-          return BooleanValue.TRUE;
-        }
-      })
-      .reduce(new ReduceFunction<BooleanValue>() {
-        @Override
-        public BooleanValue reduce(BooleanValue a, BooleanValue b) throws Exception {
-          return a;
-        }
-      });
-  }
-
-  @SuppressWarnings("unchecked")
-  public static void writeEdges(DataSet<EdgePojo> edges, DataSet<BooleanValue> marker) {
-    edges.map(new MapFunction<EdgePojo, Tuple3<String, String, Long>>() {
-      @Override
-      public Tuple3<String, String, Long> map(EdgePojo e) throws Exception {
-        return new Tuple3<>(
-          e.getSourceId().toString(),
-          e.getTargetId().toString(),
-          e.getPropertyValue("count").getLong());
-      }
-    }).withBroadcastSet(marker, "marker")
-      .output(Neo4jOutputFormat.buildNeo4jOutputFormat()
-        .setRestURI(NEO4J_OUTPUT_REST_URI)
-        .setConnectTimeout(NEO4J_CONNECT_TIMEOUT)
-        .setReadTimeout(NEO4J_READ_TIMEOUT)
-        .setUsername(NEO4J_USERNAME)
-        .setPassword(NEO4J_PASSWORD)
-        .setCypherQuery(NEO4J_CREATE_EDGE_QUERY)
-        .addParameterKey("f") // from
-        .addParameterKey("t") // to
-        .addParameterKey("c") // count
-        .setTaskBatchSize(5000)
-        .finish());
+      .setCypherQuery(NEO4J_CREATE_QUERY)
+      .addParameterKey(0, "f")    // from
+      .addParameterKey(1, "fC")   // from community
+      .addParameterKey(2, "fG")   // from gender
+      .addParameterKey(3, "fCnt") // from count
+      .addParameterKey(4, "t")    // to
+      .addParameterKey(5, "tC")   // to community
+      .addParameterKey(6, "tG")   // to gender
+      .addParameterKey(7, "tCnt") // to count
+      .addParameterKey(8, "eCnt") // edge count
+      .finish()).setParallelism(1);
   }
 
   public static class BuildImportVertex implements

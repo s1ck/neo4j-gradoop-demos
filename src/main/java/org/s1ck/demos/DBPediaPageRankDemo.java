@@ -27,14 +27,13 @@ import org.apache.flink.api.java.io.neo4j.Neo4jOutputFormat;
 import org.apache.flink.api.java.tuple.Tuple2;
 import org.apache.flink.api.java.tuple.Tuple3;
 import org.apache.flink.api.java.typeutils.TupleTypeInfo;
-import org.apache.flink.graph.Edge;
 import org.apache.flink.graph.Graph;
 import org.apache.flink.graph.Vertex;
 import org.apache.flink.graph.library.PageRank;
 
 /**
- * Reads the DBPedia knowledge graph edge-wise from Neo4j and computes the Page
- * Rank for each vertex.
+ * Reads a DBPedia graph edge-wise from Neo4j, computes the Page
+ * Rank for each vertex and updates each vertex in Neo4j with its Page Rank.
  */
 public class DBPediaPageRankDemo {
 
@@ -48,11 +47,17 @@ public class DBPediaPageRankDemo {
 
   public static final Integer NEO4J_READ_TIMEOUT = 10_000;
 
+  /**
+   * Read all edges between DBPedia pages and return source and target id
+   */
   public static final String NEO4J_EDGE_QUERY =
     "CYPHER RUNTIME=COMPILED " +
       "MATCH (p1:Page)-[:Link]->(p2) " +
       "RETURN id(p1), id(p2)";
 
+  /**
+   * Update existing vertices with a new property 'pagerank'
+   */
   public static final String NEO4J_UPDATE_QUERY =
     "UNWIND {updates} as update " +
       "MATCH (p) " +
@@ -61,6 +66,7 @@ public class DBPediaPageRankDemo {
 
   @SuppressWarnings("unchecked")
   public static void main(String[] args) throws Exception {
+
     ExecutionEnvironment env = ExecutionEnvironment.getExecutionEnvironment();
 
     Neo4jInputFormat<Tuple2<Integer, Integer>> neoInput = Neo4jInputFormat
@@ -73,27 +79,30 @@ public class DBPediaPageRankDemo {
       .setReadTimeout(NEO4J_READ_TIMEOUT)
       .finish();
 
-    // read edges and init with weight 1.0
-    DataSet<Tuple3<Integer, Integer, Double>> edges = env.createInput(neoInput,
+    // read rows from Neo4j
+    DataSet<Tuple2<Integer, Integer>> rows = env.createInput(neoInput,
       new TupleTypeInfo<Tuple2<Integer, Integer>>(
-        BasicTypeInfo.INT_TYPE_INFO,  // page id 1
-        BasicTypeInfo.INT_TYPE_INFO)) // page id 2
-     .map(new MapFunction<Tuple2<Integer, Integer>, Tuple3<Integer, Integer, Double>>() {
+        BasicTypeInfo.INT_TYPE_INFO,    // page id 1
+        BasicTypeInfo.INT_TYPE_INFO));  // page id 2
+
+    // convert rows into edges (tuple 3) and init with edge value 1.0
+    DataSet<Tuple3<Integer, Integer, Double>> edges = rows
+      .map(new MapFunction<Tuple2<Integer, Integer>, Tuple3<Integer, Integer, Double>>() {
         @Override
         public Tuple3<Integer, Integer, Double> map(Tuple2<Integer, Integer> row) throws Exception {
-          return new Edge<>(row.f0, row.f1, 1.0);
+          return new Tuple3<>(row.f0, row.f1, 1.0);
         }
       }).withForwardedFields("f0;f1");
 
-    // create Gelly graph and run Page Rank
+    // create Gelly graph
     Graph<Integer, Double, Double> graph = Graph
       .fromTupleDataSet(edges, new VertexInitializer(), env);
 
+    // Run Page Rank for 5 iterations
     DataSet<Vertex<Integer, Double>> ranks =
       graph.run(new PageRank<Integer>(0.85, 5));
 
-    // write result back to Neo4j
-
+    // update vertices in Neo4j with computed pagerank
     Neo4jOutputFormat<Vertex<Integer, Double>> neoOutput = Neo4jOutputFormat
       .buildNeo4jOutputFormat()
       .setRestURI(NEO4J_REST_URI)

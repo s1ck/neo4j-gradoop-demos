@@ -18,6 +18,7 @@
 
 package org.s1ck.demos;
 
+import org.apache.commons.net.io.Util;
 import org.apache.flink.api.common.functions.JoinFunction;
 import org.apache.flink.api.common.functions.MapFunction;
 import org.apache.flink.api.common.typeinfo.BasicTypeInfo;
@@ -63,27 +64,42 @@ public class SchemaDemo {
 
   public static final Integer NEO4J_READ_TIMEOUT = 10_000;
 
+  /**
+   * Read all vertex identifiers and their (first) type label
+   */
   public static final String NEO4J_VERTEX_QUERY =
     "CYPHER RUNTIME=COMPILED " +
       "MATCH (n) " +
-      "RETURN id(n), labels(n)[0]";
+      "RETURN id(n), head(labels(n))";
 
+  /**
+   * Read all edges and return their source id, target id and type label
+   */
   public static final String NEO4J_EDGE_QUERY =
     "CYPHER RUNTIME=COMPILED " +
       "MATCH (a)-[e]->(b) " +
       "RETURN id(e), id(a), id(b), type(e)";
 
+  /**
+   * Create a new graph from insert tuples representing edges. Each tuple
+   * consists of:
+   *
+   * - source EPGM id, label and count
+   * - target EPGM id, label and count
+   * - edge label and count
+   */
   public static final String NEO4J_CREATE_QUERY = "" +
-    "UNWIND {triples} as t " +
+    "UNWIND {tuples} as t " +
     "MERGE (a:SchemaNode {epgmId : t.f, label : t.fL, count : t.fC}) " +
     "MERGE (b:SchemaNode {epgmId : t.t, label : t.tL, count : t.tC}) " +
     "CREATE (a)-[:SchemaEdge {label : t.eL, count : t.eC}]->(b)";
 
   @SuppressWarnings("unchecked")
   public static void main(String[] args) throws Exception {
+
     ExecutionEnvironment env = ExecutionEnvironment.getExecutionEnvironment();
 
-    // enter Gradoop
+    // initialize Gradoop database from Neo4j graph
     EPGMDatabase<GraphHeadPojo, VertexPojo, EdgePojo> epgmDatabase =
       EPGMDatabase.fromExternalGraph(
         // get vertices from Neo4j
@@ -96,12 +112,12 @@ public class SchemaDemo {
     LogicalGraph<GraphHeadPojo, VertexPojo, EdgePojo> databaseGraph =
       epgmDatabase.getDatabaseGraph();
 
-    // do a simple grouping by vertex and edge label + count group members
+    // do a graph grouping by vertex and edge label (+ count group members)
     LogicalGraph<GraphHeadPojo, VertexPojo, EdgePojo> groupedGraph =
       databaseGraph.groupByVertexAndEdgeLabel();
 
     // write graph back to Neo4j
-    writeTriplets(buildTriplets(groupedGraph));
+    writeTriplets(Utils.buildTriplets(groupedGraph));
 
     env.execute();
 
@@ -125,7 +141,6 @@ public class SchemaDemo {
       new TupleTypeInfo<Tuple2<Integer, String>>(
         BasicTypeInfo.INT_TYPE_INFO,       // vertex id
         BasicTypeInfo.STRING_TYPE_INFO));  // vertex label
-
 
     return rows.map(new MapFunction<Tuple2<Integer, String>, ImportVertex<Integer>>() {
       @Override
@@ -178,33 +193,6 @@ public class SchemaDemo {
     });
   }
 
-  public static DataSet<Tuple3<VertexPojo, EdgePojo, VertexPojo>> buildTriplets(
-    LogicalGraph<GraphHeadPojo, VertexPojo, EdgePojo> graph) {
-    return graph.getVertices()
-      .join(graph.getEdges())
-      .where(new Id<VertexPojo>()).equalTo(new SourceId<EdgePojo>())
-      .with(new JoinFunction<VertexPojo, EdgePojo, Tuple2<VertexPojo, EdgePojo>>() {
-
-        @Override
-        public Tuple2<VertexPojo, EdgePojo> join(VertexPojo vertexPojo,
-          EdgePojo edgePojo) throws Exception {
-          return new Tuple2<>(vertexPojo, edgePojo);
-        }
-      })
-      .join(graph.getVertices())
-      .where("1.targetId").equalTo(new Id<VertexPojo>())
-      .with(new JoinFunction<Tuple2<VertexPojo,EdgePojo>, VertexPojo, Tuple3<VertexPojo, EdgePojo, VertexPojo>>() {
-
-        @Override
-        public Tuple3<VertexPojo, EdgePojo, VertexPojo> join(
-          Tuple2<VertexPojo, EdgePojo> sourceVertexAndEdge,
-          VertexPojo targetVertex) throws Exception {
-          return new Tuple3<>(
-            sourceVertexAndEdge.f0, sourceVertexAndEdge.f1, targetVertex);
-        }
-      });
-  }
-
   @SuppressWarnings("unchecked")
   public static void writeTriplets(DataSet<Tuple3<VertexPojo, EdgePojo, VertexPojo>> triplets) {
     triplets.map(new MapFunction<Tuple3<VertexPojo,EdgePojo,VertexPojo>,
@@ -239,7 +227,6 @@ public class SchemaDemo {
       .addParameterKey(5, "tC") // to count
       .addParameterKey(6, "eL") // edge label
       .addParameterKey(7, "eC") // edge count
-      .finish())
-      .setParallelism(1);
+      .finish()).setParallelism(1);
   }
 }
