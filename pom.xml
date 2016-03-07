@@ -17,7 +17,6 @@
         <dep.flink-neo4j.version>0.1-SNAPSHOT</dep.flink-neo4j.version>
         <dep.gradoop.version>0.2-SNAPSHOT</dep.gradoop.version>
 
-
         <plugin.maven-compiler.version>3.0</plugin.maven-compiler.version>
     </properties>
 
