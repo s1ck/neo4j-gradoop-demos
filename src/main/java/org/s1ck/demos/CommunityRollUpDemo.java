@@ -37,7 +37,7 @@ import org.gradoop.model.impl.EPGMDatabase;
 import org.gradoop.model.impl.LogicalGraph;
 import org.gradoop.model.impl.algorithms.labelpropagation.GradoopLabelPropagation;
 import org.gradoop.model.impl.operators.aggregation.ApplyAggregation;
-import org.gradoop.model.impl.operators.aggregation.functions.VertexCount;
+import org.gradoop.model.impl.operators.aggregation.functions.count.VertexCount;
 import org.gradoop.model.impl.operators.combination.ReduceCombination;
 import org.gradoop.model.impl.pojo.EdgePojo;
 import org.gradoop.model.impl.pojo.GraphHeadPojo;
