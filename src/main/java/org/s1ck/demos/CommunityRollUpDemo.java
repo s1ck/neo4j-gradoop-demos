@@ -43,6 +43,7 @@ import org.gradoop.model.impl.pojo.EdgePojo;
 import org.gradoop.model.impl.pojo.GraphHeadPojo;
 import org.gradoop.model.impl.pojo.VertexPojo;
 import org.gradoop.model.impl.properties.PropertyList;
+import org.gradoop.model.impl.properties.PropertyValue;
 import org.gradoop.util.GradoopFlinkConfig;
 
 /**
@@ -123,7 +124,8 @@ public class CommunityRollUpDemo {
         // split the resulting graph into a graph collection using the community id
         .splitBy(COMMUNITY_KEY)
         // compute vertex count for each community
-        .apply(new ApplyAggregation<>("vertexCount", new VertexCount<GraphHeadPojo, VertexPojo, EdgePojo>()))
+        .apply(new ApplyAggregation<>("vertexCount", PropertyValue.create(0),
+          new VertexCount<GraphHeadPojo, VertexPojo, EdgePojo>()))
         // select communities with more than 100 users
         .select(new FilterFunction<GraphHeadPojo>() {
           @Override

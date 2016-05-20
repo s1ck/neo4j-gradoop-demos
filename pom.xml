@@ -13,7 +13,7 @@
         <project.maven.version>3.0.0</project.maven.version>
         <project.build.targetJdk>1.7</project.build.targetJdk>
 
-        <dep.flink.version>1.0.0</dep.flink.version>
+        <dep.flink.version>1.0.3</dep.flink.version>
         <dep.flink-neo4j.version>0.1-SNAPSHOT</dep.flink-neo4j.version>
         <dep.gradoop.version>0.2-SNAPSHOT</dep.gradoop.version>
 
