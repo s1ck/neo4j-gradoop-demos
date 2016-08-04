@@ -24,21 +24,20 @@ import org.apache.flink.api.java.DataSet;
 import org.apache.flink.api.java.ExecutionEnvironment;
 import org.apache.flink.api.java.io.neo4j.Neo4jInputFormat;
 import org.apache.flink.api.java.io.neo4j.Neo4jOutputFormat;
-import org.apache.flink.api.java.operators.DataSource;
 import org.apache.flink.api.java.tuple.Tuple3;
 import org.apache.flink.api.java.tuple.Tuple6;
 import org.apache.flink.api.java.typeutils.TupleTypeInfo;
-import org.gradoop.io.graph.tuples.ImportEdge;
-import org.gradoop.io.graph.tuples.ImportVertex;
-import org.gradoop.model.api.functions.TransformationFunction;
-import org.gradoop.model.impl.EPGMDatabase;
-import org.gradoop.model.impl.LogicalGraph;
-import org.gradoop.model.impl.pojo.EdgePojo;
-import org.gradoop.model.impl.pojo.GraphHeadPojo;
-import org.gradoop.model.impl.pojo.VertexPojo;
-import org.gradoop.model.impl.properties.PropertyList;
-import org.gradoop.util.GConstants;
-import org.gradoop.util.GradoopFlinkConfig;
+import org.gradoop.common.model.impl.pojo.Edge;
+import org.gradoop.common.model.impl.pojo.Vertex;
+import org.gradoop.common.model.impl.properties.PropertyList;
+import org.gradoop.common.util.GConstants;
+import org.gradoop.flink.io.api.DataSource;
+import org.gradoop.flink.io.impl.graph.GraphDataSource;
+import org.gradoop.flink.io.impl.graph.tuples.ImportEdge;
+import org.gradoop.flink.io.impl.graph.tuples.ImportVertex;
+import org.gradoop.flink.model.api.functions.TransformationFunction;
+import org.gradoop.flink.model.impl.LogicalGraph;
+import org.gradoop.flink.util.GradoopFlinkConfig;
 
 /**
  * Extracts the persons, companies and their worksAt relations from a Neo4j
@@ -97,28 +96,28 @@ public class DrillDownDemo {
 
     ExecutionEnvironment env = ExecutionEnvironment.getExecutionEnvironment();
 
-    // initialize Gradoop database from Neo4j graph
-    EPGMDatabase<GraphHeadPojo, VertexPojo, EdgePojo> epgmDatabase =
-      EPGMDatabase.fromExternalGraph(
-        // get vertices from Neo4j
-        getImportVertices(env),
-        // get edges from Neo4j
-        getImportEdges(env),
-        GradoopFlinkConfig.createDefaultConfig(env)
-      );
+    GradoopFlinkConfig config = GradoopFlinkConfig.createConfig(env);
 
-    LogicalGraph<GraphHeadPojo, VertexPojo, EdgePojo> databaseGraph =
-      epgmDatabase.getDatabaseGraph();
+    // initialize Gradoop database from Neo4j graph
+    DataSource dataSource = new GraphDataSource<>(
+      // get vertices from Neo4j
+      getImportVertices(env),
+      // get edges from Neo4j
+      getImportEdges(env),
+      // gradoop config
+      config);
+    
+
+    LogicalGraph neoGraph = dataSource.getLogicalGraph();
 
     // do a graph grouping by vertex and edge label (+ count group members)
-    LogicalGraph<GraphHeadPojo, VertexPojo, EdgePojo> groupedGraph =
-      databaseGraph
+    LogicalGraph groupedGraph = neoGraph
         // if a vertex represents a person return a vertex with the same label.
         // Otherwise, if a vertex represents a company return a vertex with the
         // company name as label
-        .transformVertices(new TransformationFunction<VertexPojo>() {
+        .transformVertices(new TransformationFunction<Vertex>() {
           @Override
-          public VertexPojo execute(VertexPojo current, VertexPojo transformed) {
+          public Vertex execute(Vertex current, Vertex transformed) {
             if(current.getLabel().equals("person")) {
               transformed.setLabel("person");
             } else if (current.getLabel().equals("company")) {
@@ -191,7 +190,7 @@ public class DrillDownDemo {
         .setReadTimeout(NEO4J_READ_TIMEOUT)
         .finish();
 
-    DataSource<Tuple3<Integer, Integer, Integer>> rows = env
+    DataSet<Tuple3<Integer, Integer, Integer>> rows = env
       .createInput(neoInput,
         new TupleTypeInfo<Tuple3<Integer, Integer, Integer>>(
           BasicTypeInfo.INT_TYPE_INFO,      // edge id
@@ -205,8 +204,8 @@ public class DrillDownDemo {
         ImportEdge<Integer> importEdge = new ImportEdge<>();
         importEdge.setId(row.f0);
         importEdge.setLabel(GConstants.DEFAULT_EDGE_LABEL);
-        importEdge.setSourceVertexId(row.f1);
-        importEdge.setTargetVertexId(row.f2);
+        importEdge.setSourceId(row.f1);
+        importEdge.setTargetId(row.f2);
         importEdge.setProperties(PropertyList.createWithCapacity(0));
 
         return importEdge;
@@ -215,13 +214,13 @@ public class DrillDownDemo {
   }
 
   @SuppressWarnings("unchecked")
-  public static void writeTriplets(DataSet<Tuple3<VertexPojo, EdgePojo, VertexPojo>> triplets) {
-    triplets.map(new MapFunction<Tuple3<VertexPojo,EdgePojo,VertexPojo>,
+  public static void writeTriplets(DataSet<Tuple3<Vertex, Edge, Vertex>> triplets) {
+    triplets.map(new MapFunction<Tuple3<Vertex,Edge,Vertex>,
       Tuple6<String, Long, String, String, Long, Long>>() {
 
       @Override
       public Tuple6<String, Long, String, String, Long, Long> map(
-        Tuple3<VertexPojo, EdgePojo, VertexPojo> triplet) throws Exception {
+        Tuple3<Vertex, Edge, Vertex> triplet) throws Exception {
         return new Tuple6<>(
           triplet.f0.getId().toString(),
           triplet.f0.getPropertyValue("count").getLong(),

@@ -24,21 +24,20 @@ import org.apache.flink.api.java.DataSet;
 import org.apache.flink.api.java.ExecutionEnvironment;
 import org.apache.flink.api.java.io.neo4j.Neo4jInputFormat;
 import org.apache.flink.api.java.io.neo4j.Neo4jOutputFormat;
-import org.apache.flink.api.java.operators.DataSource;
 import org.apache.flink.api.java.tuple.Tuple2;
 import org.apache.flink.api.java.tuple.Tuple3;
 import org.apache.flink.api.java.tuple.Tuple4;
 import org.apache.flink.api.java.tuple.Tuple8;
 import org.apache.flink.api.java.typeutils.TupleTypeInfo;
-import org.gradoop.io.graph.tuples.ImportEdge;
-import org.gradoop.io.graph.tuples.ImportVertex;
-import org.gradoop.model.impl.EPGMDatabase;
-import org.gradoop.model.impl.LogicalGraph;
-import org.gradoop.model.impl.pojo.EdgePojo;
-import org.gradoop.model.impl.pojo.GraphHeadPojo;
-import org.gradoop.model.impl.pojo.VertexPojo;
-import org.gradoop.model.impl.properties.PropertyList;
-import org.gradoop.util.GradoopFlinkConfig;
+import org.gradoop.common.model.impl.pojo.Edge;
+import org.gradoop.common.model.impl.pojo.Vertex;
+import org.gradoop.common.model.impl.properties.PropertyList;
+import org.gradoop.flink.io.api.DataSource;
+import org.gradoop.flink.io.impl.graph.GraphDataSource;
+import org.gradoop.flink.io.impl.graph.tuples.ImportEdge;
+import org.gradoop.flink.io.impl.graph.tuples.ImportVertex;
+import org.gradoop.flink.model.impl.LogicalGraph;
+import org.gradoop.flink.util.GradoopFlinkConfig;
 
 /**
  * Extracts the labels of vertices and edges from a Neo4j database and creates
@@ -95,22 +94,21 @@ public class SchemaDemo {
 
     ExecutionEnvironment env = ExecutionEnvironment.getExecutionEnvironment();
 
-    // initialize Gradoop database from Neo4j graph
-    EPGMDatabase<GraphHeadPojo, VertexPojo, EdgePojo> epgmDatabase =
-      EPGMDatabase.fromExternalGraph(
-        // get vertices from Neo4j
-        getImportVertices(env),
-        // get edges from Neo4j
-        getImportEdges(env),
-        GradoopFlinkConfig.createDefaultConfig(env)
-      );
+    GradoopFlinkConfig config = GradoopFlinkConfig.createConfig(env);
 
-    LogicalGraph<GraphHeadPojo, VertexPojo, EdgePojo> databaseGraph =
-      epgmDatabase.getDatabaseGraph();
+    // initialize Gradoop database from Neo4j graph
+    DataSource dataSource = new GraphDataSource<>(
+      // get vertices from Neo4j
+      getImportVertices(env),
+      // get edges from Neo4j
+      getImportEdges(env),
+      // gradoop config
+      config);
+
+    LogicalGraph neoGraph = dataSource.getLogicalGraph();
 
     // do a graph grouping by vertex and edge label (+ count group members)
-    LogicalGraph<GraphHeadPojo, VertexPojo, EdgePojo> groupedGraph =
-      databaseGraph.groupByVertexAndEdgeLabel();
+    LogicalGraph groupedGraph = neoGraph.groupByVertexAndEdgeLabel();
 
     // write graph back to Neo4j
     writeTriplets(Utils.buildTriplets(groupedGraph));
@@ -165,7 +163,7 @@ public class SchemaDemo {
         .setReadTimeout(NEO4J_READ_TIMEOUT)
         .finish();
 
-    DataSource<Tuple4<Integer, Integer, Integer, String>> rows = env
+    DataSet<Tuple4<Integer, Integer, Integer, String>> rows = env
       .createInput(neoInput,
         new TupleTypeInfo<Tuple4<Integer, Integer, Integer, String>>(
           BasicTypeInfo.INT_TYPE_INFO,      // edge id
@@ -179,8 +177,8 @@ public class SchemaDemo {
       public ImportEdge<Integer> map(Tuple4<Integer, Integer, Integer, String> row) throws Exception {
         ImportEdge<Integer> importEdge = new ImportEdge<>();
         importEdge.setId(row.f0);
-        importEdge.setSourceVertexId(row.f1);
-        importEdge.setTargetVertexId(row.f2);
+        importEdge.setSourceId(row.f1);
+        importEdge.setTargetId(row.f2);
         importEdge.setLabel(row.f3);
         importEdge.setProperties(PropertyList.createWithCapacity(0));
 
@@ -190,13 +188,13 @@ public class SchemaDemo {
   }
 
   @SuppressWarnings("unchecked")
-  public static void writeTriplets(DataSet<Tuple3<VertexPojo, EdgePojo, VertexPojo>> triplets) {
-    triplets.map(new MapFunction<Tuple3<VertexPojo,EdgePojo,VertexPojo>,
+  public static void writeTriplets(DataSet<Tuple3<Vertex, Edge, Vertex>> triplets) {
+    triplets.map(new MapFunction<Tuple3<Vertex, Edge, Vertex>,
       Tuple8<String, String, Long, String, String, Long, String, Long>>() {
 
       @Override
       public Tuple8<String, String, Long, String, String, Long, String, Long> map(
-        Tuple3<VertexPojo, EdgePojo, VertexPojo> triplet) throws Exception {
+        Tuple3<Vertex, Edge, Vertex> triplet) throws Exception {
         return new Tuple8<>(
           triplet.f0.getId().toString(),
           triplet.f0.getLabel(),

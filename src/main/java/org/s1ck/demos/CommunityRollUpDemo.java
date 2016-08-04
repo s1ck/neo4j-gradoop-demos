@@ -26,25 +26,25 @@ import org.apache.flink.api.java.DataSet;
 import org.apache.flink.api.java.ExecutionEnvironment;
 import org.apache.flink.api.java.io.neo4j.Neo4jInputFormat;
 import org.apache.flink.api.java.io.neo4j.Neo4jOutputFormat;
-import org.apache.flink.api.java.operators.DataSource;
 import org.apache.flink.api.java.tuple.Tuple3;
 import org.apache.flink.api.java.tuple.Tuple4;
 import org.apache.flink.api.java.tuple.Tuple9;
 import org.apache.flink.api.java.typeutils.TupleTypeInfo;
-import org.gradoop.io.graph.tuples.ImportEdge;
-import org.gradoop.io.graph.tuples.ImportVertex;
-import org.gradoop.model.impl.EPGMDatabase;
-import org.gradoop.model.impl.LogicalGraph;
-import org.gradoop.model.impl.algorithms.labelpropagation.GradoopLabelPropagation;
-import org.gradoop.model.impl.operators.aggregation.ApplyAggregation;
-import org.gradoop.model.impl.operators.aggregation.functions.count.VertexCount;
-import org.gradoop.model.impl.operators.combination.ReduceCombination;
-import org.gradoop.model.impl.pojo.EdgePojo;
-import org.gradoop.model.impl.pojo.GraphHeadPojo;
-import org.gradoop.model.impl.pojo.VertexPojo;
-import org.gradoop.model.impl.properties.PropertyList;
-import org.gradoop.model.impl.properties.PropertyValue;
-import org.gradoop.util.GradoopFlinkConfig;
+import org.gradoop.common.model.impl.pojo.Edge;
+import org.gradoop.common.model.impl.pojo.GraphHead;
+import org.gradoop.common.model.impl.pojo.Vertex;
+import org.gradoop.common.model.impl.properties.PropertyList;
+import org.gradoop.flink.algorithms.labelpropagation.GradoopLabelPropagation;
+import org.gradoop.flink.io.api.DataSource;
+import org.gradoop.flink.io.impl.graph.GraphDataSource;
+import org.gradoop.flink.io.impl.graph.tuples.ImportEdge;
+import org.gradoop.flink.io.impl.graph.tuples.ImportVertex;
+import org.gradoop.flink.model.impl.LogicalGraph;
+import org.gradoop.flink.model.impl.operators.aggregation.ApplyAggregation;
+import org.gradoop.flink.model.impl.operators.aggregation.functions.count.VertexCount;
+import org.gradoop.flink.model.impl.operators.combination.ReduceCombination;
+import org.gradoop.flink.util.GradoopFlinkConfig;
+
 
 /**
  * Demo is using the LDBC SNB social network graph to read a subgraph from Neo4j
@@ -105,36 +105,38 @@ public class CommunityRollUpDemo {
 
     ExecutionEnvironment env = ExecutionEnvironment.getExecutionEnvironment();
 
-    // initialize Gradoop database from Neo4j graph
-    EPGMDatabase<GraphHeadPojo, VertexPojo, EdgePojo> epgmDatabase =
-      EPGMDatabase.fromExternalGraph(
-        // get vertices from Neo4j
-        getImportVertices(env),
-        // get edges from Neo4j
-        getImportEdges(env),
-        // store the external (Neo4j) identifier at the vertices / edges using that key
-        COMMUNITY_KEY,
-        // use default gradoop config
-        GradoopFlinkConfig.createDefaultConfig(env));
+    GradoopFlinkConfig config = GradoopFlinkConfig.createConfig(env);
 
-    LogicalGraph<GraphHeadPojo, VertexPojo, EdgePojo> groupedGraph =
-      epgmDatabase.getDatabaseGraph()
+    // initialize Gradoop database from Neo4j graph
+    DataSource dataSource = new GraphDataSource<>(
+      // get vertices from Neo4j
+      getImportVertices(env),
+      // get edges from Neo4j
+      getImportEdges(env),
+      // store the external (Neo4j) identifier at the vertices / edges using that key
+      COMMUNITY_KEY,
+      // gradoop config
+      config);
+    
+    LogicalGraph neoGraph = dataSource.getLogicalGraph();
+
+
+    LogicalGraph groupedGraph = neoGraph
         // run community detection using the external id as propagation value
-        .callForGraph(new GradoopLabelPropagation<GraphHeadPojo, VertexPojo, EdgePojo>(4, COMMUNITY_KEY))
+        .callForGraph(new GradoopLabelPropagation(4, COMMUNITY_KEY))
         // split the resulting graph into a graph collection using the community id
         .splitBy(COMMUNITY_KEY)
         // compute vertex count for each community
-        .apply(new ApplyAggregation<>("vertexCount", PropertyValue.create(0),
-          new VertexCount<GraphHeadPojo, VertexPojo, EdgePojo>()))
+        .apply(new ApplyAggregation("vertexCount", new VertexCount()))
         // select communities with more than 100 users
-        .select(new FilterFunction<GraphHeadPojo>() {
+        .select(new FilterFunction<GraphHead>() {
           @Override
-          public boolean filter(GraphHeadPojo graphHead) throws Exception {
+          public boolean filter(GraphHead graphHead) throws Exception {
             return graphHead.getPropertyValue("vertexCount").getLong() > 100;
           }
         })
         // combine those communities to a single graph
-        .reduce(new ReduceCombination<GraphHeadPojo, VertexPojo, EdgePojo>())
+        .reduce(new ReduceCombination())
         // group the graph by vertex properties 'community id' and 'gender'
         .groupBy(Lists.newArrayList("gender", COMMUNITY_KEY));
 
@@ -182,7 +184,7 @@ public class CommunityRollUpDemo {
         .setReadTimeout(NEO4J_READ_TIMEOUT)
         .finish();
 
-    DataSource<Tuple4<Integer, Integer, Integer, String>> rows = env
+    DataSet<Tuple4<Integer, Integer, Integer, String>> rows = env
       .createInput(neoInput,
         new TupleTypeInfo<Tuple4<Integer, Integer, Integer, String>>(
           BasicTypeInfo.INT_TYPE_INFO,      // edge id
@@ -194,11 +196,11 @@ public class CommunityRollUpDemo {
   }
 
   @SuppressWarnings("unchecked")
-  public static void writeTriplets(DataSet<Tuple3<VertexPojo, EdgePojo, VertexPojo>> triplets) {
-    triplets.map(new MapFunction<Tuple3<VertexPojo,EdgePojo,VertexPojo>, Tuple9<String, Integer, String, Long, String, Integer, String, Long, Long>>() {
+  public static void writeTriplets(DataSet<Tuple3<Vertex, Edge, Vertex>> triplets) {
+    triplets.map(new MapFunction<Tuple3<Vertex,Edge,Vertex>, Tuple9<String, Integer, String, Long, String, Integer, String, Long, Long>>() {
       @Override
       public Tuple9<String, Integer, String, Long, String, Integer, String, Long, Long> map(
-        Tuple3<VertexPojo, EdgePojo, VertexPojo> triplet) throws Exception {
+        Tuple3<Vertex, Edge, Vertex> triplet) throws Exception {
         return new Tuple9<>(
           triplet.f0.getId().toString(),
           triplet.f0.getPropertyValue(COMMUNITY_KEY).getInt(),
@@ -258,8 +260,8 @@ public class CommunityRollUpDemo {
       throws Exception {
       importEdge.setId(row.f0);
       importEdge.setLabel(row.f3);
-      importEdge.setSourceVertexId(row.f1);
-      importEdge.setTargetVertexId(row.f2);
+      importEdge.setSourceId(row.f1);
+      importEdge.setTargetId(row.f2);
       importEdge.setProperties(PropertyList.createWithCapacity(0));
 
       return importEdge;

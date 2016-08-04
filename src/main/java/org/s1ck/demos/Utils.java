@@ -4,12 +4,12 @@ import org.apache.flink.api.common.functions.JoinFunction;
 import org.apache.flink.api.java.DataSet;
 import org.apache.flink.api.java.tuple.Tuple2;
 import org.apache.flink.api.java.tuple.Tuple3;
-import org.gradoop.model.impl.LogicalGraph;
-import org.gradoop.model.impl.functions.epgm.Id;
-import org.gradoop.model.impl.functions.epgm.SourceId;
-import org.gradoop.model.impl.pojo.EdgePojo;
-import org.gradoop.model.impl.pojo.GraphHeadPojo;
-import org.gradoop.model.impl.pojo.VertexPojo;
+import org.gradoop.common.model.impl.pojo.Edge;
+import org.gradoop.common.model.impl.pojo.Vertex;
+import org.gradoop.flink.model.impl.LogicalGraph;
+import org.gradoop.flink.model.impl.functions.epgm.Id;
+import org.gradoop.flink.model.impl.functions.epgm.SourceId;
+
 
 public class Utils {
 
@@ -20,27 +20,26 @@ public class Utils {
    * @param graph logical graph
    * @return triplet dataset
    */
-  public static DataSet<Tuple3<VertexPojo, EdgePojo, VertexPojo>> buildTriplets(
-    LogicalGraph<GraphHeadPojo, VertexPojo, EdgePojo> graph) {
+  public static DataSet<Tuple3<Vertex, Edge, Vertex>> buildTriplets(LogicalGraph graph) {
     return graph.getVertices()
       .join(graph.getEdges())
-      .where(new Id<VertexPojo>()).equalTo(new SourceId<EdgePojo>())
-      .with(new JoinFunction<VertexPojo, EdgePojo, Tuple2<VertexPojo, EdgePojo>>() {
+      .where(new Id<Vertex>()).equalTo(new SourceId<>())
+      .with(new JoinFunction<Vertex, Edge, Tuple2<Vertex, Edge>>() {
 
         @Override
-        public Tuple2<VertexPojo, EdgePojo> join(VertexPojo vertexPojo,
-          EdgePojo edgePojo) throws Exception {
+        public Tuple2<Vertex, Edge> join(Vertex vertexPojo,
+          Edge edgePojo) throws Exception {
           return new Tuple2<>(vertexPojo, edgePojo);
         }
       })
       .join(graph.getVertices())
-      .where("1.targetId").equalTo(new Id<VertexPojo>())
-      .with(new JoinFunction<Tuple2<VertexPojo,EdgePojo>, VertexPojo, Tuple3<VertexPojo, EdgePojo, VertexPojo>>() {
+      .where("1.targetId").equalTo(new Id<Vertex>())
+      .with(new JoinFunction<Tuple2<Vertex,Edge>, Vertex, Tuple3<Vertex, Edge, Vertex>>() {
 
         @Override
-        public Tuple3<VertexPojo, EdgePojo, VertexPojo> join(
-          Tuple2<VertexPojo, EdgePojo> sourceVertexAndEdge,
-          VertexPojo targetVertex) throws Exception {
+        public Tuple3<Vertex, Edge, Vertex> join(
+          Tuple2<Vertex, Edge> sourceVertexAndEdge,
+          Vertex targetVertex) throws Exception {
           return new Tuple3<>(
             sourceVertexAndEdge.f0, sourceVertexAndEdge.f1, targetVertex);
         }
